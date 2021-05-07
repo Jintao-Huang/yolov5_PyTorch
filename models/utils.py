@@ -28,30 +28,6 @@ def freeze_layers(model, layers):
             parameter.requires_grad_(True)
 
 
-class FrozenBatchNorm2d(nn.Module):
-    """copy from `torchvision.ops.misc`"""
-
-    def __init__(self, in_channels, eps=1e-5, *args, **kwargs):  # BN: num_features, eps=1e-5, momentum=0.1
-        """`*args, **kwargs` to prevent error"""
-        self.eps = eps
-        super(FrozenBatchNorm2d, self).__init__()
-        self.register_buffer("weight", torch.ones(in_channels))
-        self.register_buffer("bias", torch.zeros(in_channels))
-        self.register_buffer("running_mean", torch.zeros(in_channels))
-        self.register_buffer("running_var", torch.ones(in_channels))
-        self.register_buffer('num_batches_tracked', torch.tensor(0, dtype=torch.long))  # Prevent load errors
-
-    def forward(self, x):
-        if x.dim() != 4:
-            raise ValueError("expected 4D input (got %dD input)" % x.dim())
-        mean, var = self.running_mean, self.running_var
-        weight, bias = self.weight, self.bias
-
-        mean, var = mean[:, None, None], var[:, None, None]
-        weight, bias = weight[:, None, None], bias[:, None, None]
-        return (x - mean) * torch.rsqrt(var + self.eps) * weight + bias
-
-
 def get_scale_pad(img_shape, new_shape, auto=True, stride=32):
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)
@@ -153,5 +129,47 @@ def convert_boxes(target, img_shape, img0_shape):
     pad = (img_shape[1] - img0_shape[1] * ratio) / 2, (img_shape[0] - img0_shape[0] * ratio) / 2  # wh
     boxes[:, 0::2] -= pad[0]  # lr - w
     boxes[:, 1::2] -= pad[1]  # tb - h
-    boxes[:] /= ratio
+    boxes.data /= ratio
     clip_boxes_to_image(boxes, img0_shape)
+
+
+def fuse_conv_bn(conv, bn):
+    """Fuse convolution and batchnorm layers https://tehnokv.com/posts/fusing-batchnorm-and-conv/. (freeze)
+
+    :param conv:
+    :param bn:
+    :return: new_conv
+    """
+    fused_conv = nn.Conv2d(conv.in_channels, conv.out_channels, conv.kernel_size, conv.stride, conv.padding,
+                           groups=conv.groups, bias=True).requires_grad_(False).to(conv.weight.device)
+
+    # weight
+    conv_w = conv.weight.view(conv.out_channels, -1)  # [32, 12, 3, 3], [32, 108]
+    # bn_out = bn_in * bn_scale + bn_b
+    bn_scale = bn.weight * torch.rsqrt(bn.running_var + bn.eps)  # [32]
+    bn_w = torch.diag(bn_scale)  # [32, 32]. 对角矩阵
+    fused_conv.weight.data = (bn_w @ conv_w).view(fused_conv.weight.shape)
+
+    # bias
+    conv_b = torch.zeros(conv.weight.size(0), device=conv.weight.device) if conv.bias is None else conv.bias
+    bn_b = bn.bias - bn.running_mean * bn_scale
+    fused_conv.bias.data = (bn_w @ conv_b[:, None]).flatten() + bn_b
+
+    return fused_conv
+
+
+def model_info(model, img_size=640):
+    img_size = img_size if isinstance(img_size, (tuple, list)) else (img_size, img_size)
+    num_params = sum(x.numel() for x in model.parameters())  # number parameters
+    num_grads = sum(x.numel() for x in model.parameters() if x.requires_grad)  # number gradients
+    try:  # FLOPS
+        from thop import profile
+        x = torch.rand((1, 3, 32, 32), device=next(model.parameters()).device)
+        macs, num_params = profile(model, inputs=(x,), verbose=False)
+        flops = 2 * macs
+        flops_str = ", %.1f GFLOPS" % (flops * img_size[0] * img_size[1] / 32 / 32 / 1e9)  # 640x640 GFLOPS
+    except (ImportError, Exception):
+        flops_str = ""
+
+    print("Model Summary: %d layers, %d parameters, %d gradients%s" %
+          (len(list(model.modules())), num_params, num_grads, flops_str))

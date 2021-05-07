@@ -4,6 +4,8 @@ import torch.nn as nn
 from .backbone import YOLOv5Backbone
 from .fpn import PANet
 from .head import Head
+from .utils import fuse_conv_bn
+from .common import ConvBnSiLU
 
 __all__ = ["YOLOv5"]
 
@@ -27,3 +29,12 @@ class YOLOv5(nn.Module):
         x = self.fpn(x)  # e.g. List[shape[1, 128, 80, 80], shape[1, 256, 40, 40], shape[1, 512, 20, 20]]
         x = self.head(x)
         return x
+
+    def fuse(self):
+        print("Fusing layers...")
+        for m in self.modules():
+            if type(m) is ConvBnSiLU and hasattr(m, 'bn'):
+                m.conv = fuse_conv_bn(m.conv, m.bn)  # update conv
+                delattr(m, 'bn')  # remove bn
+                m.forward = m.fuse_forward  # update forward
+        return self

@@ -19,6 +19,11 @@ class ConvBnSiLU(nn.Module):
         x = self.act(x)
         return x
 
+    def fuse_forward(self, x):
+        x = self.conv(x)
+        x = self.act(x)
+        return x
+
 
 class Bottleneck(nn.Module):
     # Standard bottleneck

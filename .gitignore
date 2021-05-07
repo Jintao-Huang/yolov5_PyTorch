@@ -4,5 +4,5 @@ images/*
 
 *.py
 !test_correctness.py
-!weights/yolov5s.pt
+!weights/yolov5s.pth
 !images/1.png
