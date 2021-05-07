@@ -9,8 +9,7 @@ except ImportError:
 import torch.nn as nn
 import torch
 import cv2 as cv
-from PIL import Image
-import numpy as np
+from torchvision.ops.boxes import nms as _nms
 
 
 def freeze_layers(model, layers):
@@ -53,7 +52,7 @@ class FrozenBatchNorm2d(nn.Module):
         return (x - mean) * torch.rsqrt(var + self.eps) * weight + bias
 
 
-def get_scale_pad(img_shape, new_shape, training=False, stride=32):
+def get_scale_pad(img_shape, new_shape, auto=True, stride=32):
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)
 
@@ -62,18 +61,19 @@ def get_scale_pad(img_shape, new_shape, training=False, stride=32):
     new_unpad = int(round(img_shape[1] * ratio)), int(round(img_shape[0] * ratio))  # new image unpad shape
 
     # Compute padding
-    pad_w, pad_h = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]
-    if not training:  # detect
+    pad_w, pad_h = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # square
+    if auto:  # detect. rect
         pad_w, pad_h = pad_w % stride, pad_h % stride
     pad_w, pad_h = pad_w / 2, pad_h / 2  # divide padding into 2 sides
     return ratio, new_unpad, (pad_w, pad_h)
 
 
-def resize(img, new_shape=(640, 640), training=False, color=(114, 114, 114), stride=32):
-    """copy from official yolov5"""
+def resize_pad(img, new_shape=640, auto=True, color=(114, 114, 114), stride=32):
+    """copy from official yolov5 letterbox()"""
     # Resize and pad image
     shape = img.shape[:2]  # current shape(H, W)
-    ratio, new_unpad, (pad_w, pad_h) = get_scale_pad(shape, new_shape, training, stride)
+    new_shape = new_shape if isinstance(new_shape, (tuple, list)) else (new_shape, new_shape)
+    ratio, new_unpad, (pad_w, pad_h) = get_scale_pad(shape, new_shape, auto, stride)
     if ratio != 1:  # resize
         img = cv.resize(img, new_unpad, interpolation=cv.INTER_LINEAR)
     top, bottom = int(round(pad_h - 0.1)), int(round(pad_h + 0.1))  # 防止0.5, 0.5
@@ -82,28 +82,76 @@ def resize(img, new_shape=(640, 640), training=False, color=(114, 114, 114), str
     return img, ratio, (pad_w, pad_h)  # 处理后的图片, 比例, padding的像素
 
 
-def pil_to_cv(img):
-    """转PIL.Image到cv (Turn PIL.Image to CV(BGR))
-
-    :param img: PIL.Image. RGB. 0-255
-    :return: ndarray. BGR. 0-255,
+def ltrb_to_cxcywh(boxes):
     """
-    mode = img.mode
-    arr = np.asarray(img)
-    if mode == "RGB":
-        arr = cv.cvtColor(arr, cv.COLOR_RGB2BGR)
-    else:
-        raise ValueError("img.mode nonsupport")
-    return arr
 
-
-def cv_to_pil(arr):
-    """转cv到PIL.Image (Turn CV(BGR) to PIL.Image)
-
-    :param arr: ndarray. BGR. 0-255
-    :return: PIL.Image. RGB. 0-255
+    :param boxes: shape[X, 4]. (left, top, right, bottom)
+    :return: shape[X, 4]. (center_x, center_y, width, height)
     """
-    if arr.dtype != np.uint8:
-        raise ValueError("arr.dtype nonsupport")
-    arr = cv.cvtColor(arr, cv.COLOR_BGR2RGB)
-    return Image.fromarray(arr)
+    lt, rb = boxes[:, 0:2], boxes[:, 2:4]
+    wh = rb - lt
+    center_xy = lt + wh / 2
+    return torch.cat([center_xy, wh], -1)
+
+
+def cxcywh_to_ltrb(boxes):
+    """
+
+    :param boxes: shape(X, 4). (center_x, center_y, width, height)
+    :return: shape(X, 4). (left, top, right, bottom)
+    """
+    center_xy, wh = boxes[:, 0:2], boxes[:, 2:4]
+    lt = center_xy - wh / 2
+    rb = lt + wh
+    return torch.cat([lt, rb], -1)
+
+
+def nms(prediction, conf_thres, iou_thres):
+    """
+
+    :param prediction: Tensor. e.g. shape[N, 15120, 25]
+    :param conf_thres: float. e.g. 0.2
+    :param iou_thres: float. e.g. 0.45
+    :return: e.g. List[shape[62, 6]], when N = 1. [boxes_ltrb, conf, cls]
+    """
+    candidates = prediction[:, :, 4] > conf_thres
+    output = [torch.zeros((0, 6), device=prediction.device)] * prediction.shape[0]
+    for i, x in enumerate(prediction):
+        x = x[candidates[i]]  # shape[15120, 85] -> [1042, 85]
+        if x.shape[0] == 0:
+            continue
+        x[:, 5:] *= x[:, 4:5]
+        box = cxcywh_to_ltrb(x[:, :4])  # shape[1042, 4]
+        # conf: score. cls: 属于哪一个分类
+        conf, cls = torch.max(x[:, 5:], 1, keepdim=True)  # shape[1042, 1], shape[1042, 1]
+        x = torch.cat([box, conf, cls.float()], 1)  # [1042, 6]
+        x = x[conf.flatten() > conf_thres]  # [763, 6]]
+        if x.shape[0] == 0:
+            continue
+        boxes, scores = x[:, :4] + x[:, 5:6] * 4096, x[:, 4]
+        keep_idxes = _nms(boxes, scores, iou_thres)  # NMS  # shape[62]. long
+        output[i] = x[keep_idxes]
+    return output
+
+
+def clip_boxes_to_image(boxes, img_shape):
+    # Clip boxes to image shape (height, width)
+    boxes[:, 0::2].clamp_(0, img_shape[1])  # left, right
+    boxes[:, 1::2].clamp_(0, img_shape[0])  # top, bottom
+
+
+def convert_boxes(target, img_shape, img0_shape):
+    """
+
+    :param target: e.g. shape[62, 6]
+    :param img_shape: [384, 640]
+    :param img0_shape: [1080, 1920]
+    :return: None
+    """
+    boxes = target[:, :4]
+    ratio = min(img_shape[0] / img0_shape[0], img_shape[1] / img0_shape[1])
+    pad = (img_shape[1] - img0_shape[1] * ratio) / 2, (img_shape[0] - img0_shape[0] * ratio) / 2  # wh
+    boxes[:, 0::2] -= pad[0]  # lr - w
+    boxes[:, 1::2] -= pad[1]  # tb - h
+    boxes[:] /= ratio
+    clip_boxes_to_image(boxes, img0_shape)

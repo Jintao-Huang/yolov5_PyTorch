@@ -1,0 +1,8 @@
+other/
+weights/*
+images/*
+
+*.py
+!test_correctness.py
+!weights/yolov5s.pt
+!images/1.png

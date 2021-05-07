@@ -85,29 +85,22 @@ def draw_target_in_image(image, target, colors_map=None, labels_map=None):
     """画框在image上 (draw boxes and text in image)
 
     :param image: ndarray[H, W, C]. BGR. 变
-    :param target: dict("boxes", "labels", "). (ltrb)  不变
-    :param colors_map: dict[int: str]/List -> tuple(B, G, R)  # [0, 256).
-    :param labels_map: dict[int: str]/List. 将int 映射成 类别. 默认: coco_labels_map
+    :param target: Tensor[X, 6]. [boxes_ltrb, conf, cls].
+    :param colors_map: List -> tuple(B, G, R)  # [0, 256).
+    :param labels_map: List. 将int 映射成 类别. 默认: coco_labels_map
     :return: None
     """
-    global colors
-    global coco_labels_map
+    colors_map = colors_map or default_colors
+    labels_map = labels_map or coco_labels
 
-    colors_map = colors_map or colors
-    labels_map = labels_map or coco_labels_map
-    boxes = target['boxes'].round().int().cpu().numpy()
-    labels = target['labels'].cpu().numpy()
-
-    scores = target.get('scores')
-    if scores is None:
-        scores = np.ones_like(labels)
-    else:
-        scores = scores.cpu().numpy()
+    boxes = target[:, :4].round().int().cpu().numpy()
+    scores = target[:, 4].cpu().numpy()
+    labels = target[:, 5].int().cpu().numpy()
     # draw
     for box, label in zip(boxes, labels):
         color = colors_map[label]
         draw_box(image, box, color=color)  # 画方框
-    for box, label, score in zip(boxes, labels, scores):  # 防止框把字盖住
+    for box, label, score in zip(boxes, labels, scores):  # 先画框再写字: 防止框把字盖住
         color = colors_map[label]
         label_name = labels_map[label]
         text = "%s %.2f" % (label_name, score)
@@ -117,68 +110,23 @@ def draw_target_in_image(image, target, colors_map=None, labels_map=None):
 def resize_max(image, max_height=None, max_width=None):
     """将图像resize成最大不超过max_height, max_width的图像. (双线性插值)
 
-    :param image: PIL.Image / ndarray(H, W, C). BGR. const
+    :param image: ndarray[H, W, C]. BGR. const
     :param max_width: int
     :param max_height: int
-    :return: shape(H, W, C). BGR"""
+    :return: ndarray[H, W, C]. BGR"""
 
     # 1. 输入
-    if isinstance(image, np.ndarray):
-        height_ori, width_ori = image.shape[:2]
-    elif isinstance(image, Image.Image):
-        height_ori, width_ori = image.height, image.width
-    else:
-        raise ValueError("the type of image nonsupport. only support ndarray(H, W, 3) and PIL.Image")
-
-    max_width = max_width or width_ori
-    max_height = max_height or height_ori
+    height0, width0 = image.shape[:2]
+    max_width = max_width or width0
+    max_height = max_height or height0
     # 2. 算法
-    width = max_width
-    height = width / width_ori * height_ori
-    if height > max_height:
-        height = max_height
-        width = height / height_ori * width_ori
-    if isinstance(image, np.ndarray):
-        image = cv.resize(image, (int(width), int(height)), interpolation=cv.INTER_LINEAR)
-    elif isinstance(image, Image.Image):
-        image = image.resize((int(width), int(height)), Image.BILINEAR)
-
+    ratio = min(max_height / height0, max_width / width0)
+    new_shape = int(round(width0 * ratio)), int(round(height0 * ratio))
+    image = cv.resize(image, new_shape, interpolation=cv.INTER_LINEAR)
     return image
 
 
-def resize_equal(image, height=None, width=None, scale=None):
-    """等比例缩放 (优先级: height > width > scale). (双线性插值)
-
-    :param image: PIL.Image / ndarray(H, W, C) (BGR). const
-    :param height: 高
-    :param width: 宽
-    :param scale: 比例
-    """
-    # 1. 输入
-    if isinstance(image, np.ndarray):
-        height_ori, width_ori = image.shape[:2]
-    elif isinstance(image, Image.Image):
-        height_ori, width_ori = image.height, image.width
-    else:
-        raise ValueError("the type of image nonsupport. only support ndarray(H, W, 3) and PIL.Image")
-    # 2. 算法
-    if height:
-        width = height / height_ori * width_ori
-    elif width:
-        height = width / width_ori * height_ori
-    elif scale:
-        height, width = height_ori * scale, width_ori * scale
-    else:
-        ValueError("All of height, width, scale are `None`")
-
-    if isinstance(image, np.ndarray):
-        image = cv.resize(image, (int(width), int(height)), interpolation=cv.INTER_LINEAR)
-    elif isinstance(image, Image.Image):
-        image = image.resize((int(width), int(height)), Image.BILINEAR)
-    return image
-
-
-coco_labels_map = {
+coco_labels = {
     0: 'person', 1: 'bicycle', 2: 'car', 3: 'motorcycle', 4: 'airplane', 5: 'bus',
     6: 'train', 7: 'truck', 8: 'boat', 9: 'traffic light', 10: 'fire hydrant',
     11: '', 12: 'stop sign', 13: 'parking meter', 14: 'bench', 15: 'bird',
@@ -199,7 +147,7 @@ coco_labels_map = {
     86: 'scissors', 87: 'teddy bear', 88: 'hair drier', 89: 'toothbrush'
 }
 
-colors = [
+default_colors = [
     (0, 252, 124), (0, 255, 127), (255, 255, 0), (220, 245, 245), (255, 255, 240),
     (205, 235, 255), (196, 228, 255), (212, 255, 127), (226, 43, 138), (135, 184, 222),
     (160, 158, 95), (215, 235, 250), (30, 105, 210), (80, 127, 255), (237, 149, 100),

@@ -14,7 +14,10 @@ class ConvBnSiLU(nn.Module):
         self.act = nn.SiLU(inplace=True) if activation else nn.Identity()
 
     def forward(self, x):
-        return self.act(self.bn(self.conv(x)))
+        x = self.conv(x)
+        x = self.bn(x)
+        x = self.act(x)
+        return x
 
 
 class Bottleneck(nn.Module):
@@ -27,7 +30,11 @@ class Bottleneck(nn.Module):
         self.shortcut = shortcut and in_channels == out_channels
 
     def forward(self, x):
-        return (x + self.conv2(self.conv1(x))) if self.shortcut else self.conv2(self.conv1(x))
+        x0 = x
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = (x0 + x) if self.shortcut else x
+        return x
 
 
 class C3(nn.Module):
@@ -37,11 +44,16 @@ class C3(nn.Module):
         neck = int(out_channels * expansion)
         self.conv1 = ConvBnSiLU(in_channels, neck, 1, 1, 0, True)
         self.conv2 = ConvBnSiLU(in_channels, neck, 1, 1, 0, True)
-        self.conv3 = ConvBnSiLU(2 * neck, out_channels, 1, 1, 0, True)
         self.bottleneck_n = nn.Sequential(*[Bottleneck(neck, neck, shortcut, 1.0) for _ in range(repeat)])
+        self.conv3 = ConvBnSiLU(2 * neck, out_channels, 1, 1, 0, True)
 
     def forward(self, x):
-        return self.conv3(torch.cat((self.bottleneck_n(self.conv1(x)), self.conv2(x)), dim=1))
+        x1 = self.conv1(x)
+        x1 = self.bottleneck_n(x1)
+        x2 = self.conv2(x)
+        x = torch.cat([x1, x2], dim=1)
+        x = self.conv3(x)
+        return x
 
 
 class SPP(nn.Module):
@@ -56,7 +68,11 @@ class SPP(nn.Module):
 
     def forward(self, x):
         x = self.conv1(x)
-        return self.conv2(torch.cat([x] + [max_pool(x) for max_pool in self.max_pool_list], 1))
+        x0 = x
+        x = [max_pool(x) for max_pool in self.max_pool_list]
+        x = torch.cat([x0] + x, 1)
+        x = self.conv2(x)
+        return x
 
 
 class Focus(nn.Module):
@@ -66,7 +82,9 @@ class Focus(nn.Module):
         self.conv = ConvBnSiLU(in_channels * 4, out_channels, kernel_size, stride, padding, activation)
 
     def forward(self, x):
-        return self.conv(torch.cat([x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]], 1))
+        x = torch.cat([x[:, :, ::2, ::2], x[:, :, 1::2, ::2], x[:, :, ::2, 1::2], x[:, :, 1::2, 1::2]], 1)
+        x = self.conv(x)
+        return x
 
 
 class Concat(nn.Module):

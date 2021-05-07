@@ -3,48 +3,35 @@
 import torch.utils.data as tud
 import torch
 import cv2 as cv
-from .utils import resize, get_scale_pad
-from .image_enhance import hflip_image, vflip_image, rotate, rotate_90, rotate_180, rotate_270
+from .utils import resize_pad, get_scale_pad
+import os
 
 
-class MyDataset(tud.Dataset):
-    def __init__(self, image_path_list, target_list, return_img0=False, image_enhance=True):
+class LoadImages:
+    def __init__(self, image_path, image_size=640, stride=32):
         """
 
-        :param image_path_list: List[str]
-        :param target_list: List[torch.tensor]
-        :param return_img0: False: train, True: test
-        :param image_enhance: True: train, False: test
+        :param image_path: str. dir or file
         """
-        assert len(image_path_list) == len(target_list)
-        self.image_path_list = image_path_list
-        self.target_list = target_list
-        self.return_img0 = return_img0
-        self.image_enhance = image_enhance
+        if os.path.isdir(image_path):
+            self.image_path_list = [os.path.join(image_path, image_fname) for image_fname in os.listdir(image_path)]
+        else:
+            self.image_path_list = [image_path]
+        self.image_size = image_size
+        self.stride = stride
 
     def __getitem__(self, idx):
         """
 
         :param idx:
-        :return: x: Tensor[3, H, W], target: shape[9], img_ori: ndarray[H, W, 3]
+        :return: x: Tensor[1, 3, H, W], img0: ndarray[H0, W0, 3]
         """
         image_path = self.image_path_list[idx]
-        target = self.target_list[idx]  # Tensor[9]
-
         img0 = cv.imread(image_path)
-
-        if self.image_enhance:
-            if torch.rand(()) < 0.5:
-                img0, target[1:] = hflip_image(img0, target[1:])
-            if torch.rand(()) < 0.5:
-                img0, target[1:] = vflip_image(img0, target[1:])
-            if torch.rand(()) < 0.75:
-                img0, target[1:] = rotate(img0, target[1:], torch.randint(0, 3, ()))
-        x, target = pre_process(img0, target)
-        if not self.return_img0:  # train
-            return x, target
-        else:
-            return x, target, img0
+        x = resize_pad(img0, self.image_size)[0]
+        x = x[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to (C, H, W))
+        x = torch.as_tensor(x / 255, dtype=torch.float32)[None]
+        return x, img0
 
     def __len__(self):
         return len(self.image_path_list)
@@ -73,7 +60,6 @@ def pre_process(x, target=None):
     x = torch.as_tensor(x / 255, dtype=torch.float32)
 
     return x, target
-
 
 
 def post_process(x, anchor_points, img0_shape, img_shape=(640, 640)):

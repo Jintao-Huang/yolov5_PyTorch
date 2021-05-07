@@ -1,7 +1,6 @@
 # Author: Jintao Huang
 # Time: 2020-6-6
 
-from .utils import to, collate_fn
 from torch.utils.data import DataLoader
 import torch
 
