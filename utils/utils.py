@@ -48,8 +48,8 @@ def load_params(model, filepath, prefix="", drop_layers=(), strict=True):
 
     :param model: 变
     :param filepath: str
-    :param prefix: 在pth的state_dict加上前缀.
-    :param drop_layers: 对加完前缀后的pth进行剔除.
+    :param prefix: 在pth的state_dict加上前缀. e.g. "backbone."
+    :param drop_layers: 对加完前缀后的pth进行剔除. e.g. "head"
     :param strict: bool
     """
 

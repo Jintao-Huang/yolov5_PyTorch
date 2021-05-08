@@ -81,18 +81,20 @@ def cv_to_pil(arr):
     return Image.fromarray(arr)
 
 
-def draw_target_in_image(image, target, colors_map=None, labels_map=None):
+def draw_target_in_image(image, target, labels_map="coco", colors_map=None, ):
     """画框在image上 (draw boxes and text in image)
 
     :param image: ndarray[H, W, C]. BGR. 变
     :param target: Tensor[X, 6]. [boxes_ltrb, conf, cls].
+    :param labels_map: List/str["coco", "voc"]. 将int 映射成 类别. 默认: coco_labels_map
     :param colors_map: List -> tuple(B, G, R)  # [0, 256).
-    :param labels_map: List. 将int 映射成 类别. 默认: coco_labels_map
     :return: None
     """
+    if labels_map == "coco":
+        labels_map = coco_labels
+    elif labels_map == "voc":
+        labels_map = voc_labels
     colors_map = colors_map or default_colors
-    labels_map = labels_map or coco_labels
-
     boxes = target[:, :4].round().int().cpu().numpy()
     scores = target[:, 4].cpu().numpy()
     labels = target[:, 5].int().cpu().numpy()
@@ -146,6 +148,11 @@ coco_labels = {
     81: 'refrigerator', 82: '', 83: 'book', 84: 'clock', 85: 'vase',
     86: 'scissors', 87: 'teddy bear', 88: 'hair drier', 89: 'toothbrush'
 }
+
+voc_labels = ['aeroplane', 'bicycle', 'bird', 'boat', 'bottle',
+              'bus', 'car', 'cat', 'chair', 'cow',
+              'diningtable', 'dog', 'horse', 'motorbike', 'person',
+              'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor']
 
 default_colors = [
     (0, 252, 124), (0, 255, 127), (255, 255, 0), (220, 245, 245), (255, 255, 240),

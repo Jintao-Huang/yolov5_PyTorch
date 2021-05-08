@@ -28,12 +28,12 @@ def freeze_layers(model, layers):
             parameter.requires_grad_(True)
 
 
-def get_scale_pad(img_shape, new_shape, auto=True, stride=32):
+def get_scale_pad(img_shape, new_shape, auto=True, stride=32, only_pad=False):
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)
 
     # Scale ratio (new / old)
-    ratio = min(new_shape[0] / img_shape[0], new_shape[1] / img_shape[1])
+    ratio = 1 if only_pad else min(new_shape[0] / img_shape[0], new_shape[1] / img_shape[1])
     new_unpad = int(round(img_shape[1] * ratio)), int(round(img_shape[0] * ratio))  # new image unpad shape
 
     # Compute padding
@@ -44,14 +44,26 @@ def get_scale_pad(img_shape, new_shape, auto=True, stride=32):
     return ratio, new_unpad, (pad_w, pad_h)
 
 
-def resize_pad(img, new_shape=640, auto=True, color=(114, 114, 114), stride=32):
-    """copy from official yolov5 letterbox()"""
+def resize_pad(img, new_shape=640, auto=True, stride=32, only_pad=False, color=(114, 114, 114)):
+    """copy from official yolov5 letterbox()
+
+    :param img: ndarray[H, W, C]
+    :param new_shape: Union[int, Tuple[int, int]]
+    :param auto: bool. new_shape是否自动适应
+    :param color: BRG
+    :param stride: int
+    :param only_pad: 不resize, 只pad
+    :return: img: ndarray[H, W, C], ratio: float, pad: Tuple[W, H]
+    """
     # Resize and pad image
     shape = img.shape[:2]  # current shape(H, W)
     new_shape = new_shape if isinstance(new_shape, (tuple, list)) else (new_shape, new_shape)
-    ratio, new_unpad, (pad_w, pad_h) = get_scale_pad(shape, new_shape, auto, stride)
+    ratio, new_unpad, (pad_w, pad_h) = get_scale_pad(shape, new_shape, auto, stride, only_pad)
     if ratio != 1:  # resize
-        img = cv.resize(img, new_unpad, interpolation=cv.INTER_LINEAR)
+        img = cv.resize(img, new_unpad,  # 缩小, 放大
+                        # interpolation=cv.INTER_LINEAR)
+                        interpolation=cv.INTER_AREA if ratio < 1 else cv.INTER_LINEAR)
+
     top, bottom = int(round(pad_h - 0.1)), int(round(pad_h + 0.1))  # 防止0.5, 0.5
     left, right = int(round(pad_w - 0.1)), int(round(pad_w + 0.1))
     img = cv.copyMakeBorder(img, top, bottom, left, right, cv.BORDER_CONSTANT, value=color)  # add border(grey)
@@ -85,7 +97,7 @@ def cxcywh_to_ltrb(boxes):
 def nms(prediction, conf_thres, iou_thres):
     """
 
-    :param prediction: Tensor. e.g. shape[N, 15120, 25]
+    :param prediction: Tensor. e.g. shape[N, 15120, 25]. [cxcywh, obj_conf, cls_conf]
     :param conf_thres: float. e.g. 0.2
     :param iou_thres: float. e.g. 0.45
     :return: e.g. List[shape[62, 6]], when N = 1. [boxes_ltrb, conf, cls]
@@ -117,9 +129,9 @@ def clip_boxes_to_image(boxes, img_shape):
 
 
 def convert_boxes(target, img_shape, img0_shape):
-    """
+    """Notice: Modify Target directly
 
-    :param target: e.g. shape[62, 6]
+    :param target: e.g. shape[62, 6]. [boxes_ltrb, conf, cls]
     :param img_shape: [384, 640]
     :param img0_shape: [1080, 1920]
     :return: None
@@ -164,7 +176,8 @@ def model_info(model, img_size=640):
     num_grads = sum(x.numel() for x in model.parameters() if x.requires_grad)  # number gradients
     try:  # FLOPS
         from thop import profile
-        x = torch.rand((1, 3, 32, 32), device=next(model.parameters()).device)
+        p = next(model.parameters())
+        x = torch.rand((1, 3, 32, 32), dtype=p.dtype, device=p.device)
         macs, num_params = profile(model, inputs=(x,), verbose=False)
         flops = 2 * macs
         flops_str = ", %.1f GFLOPS" % (flops * img_size[0] * img_size[1] / 32 / 32 / 1e9)  # 640x640 GFLOPS

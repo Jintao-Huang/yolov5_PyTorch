@@ -4,5 +4,7 @@ images/*
 
 *.py
 !test_correctness.py
-!weights/yolov5s.pth
+!make_dataset.py
+!weights/yolov5s_coco.pth
+!weights/yolov5s_voc.pth
 !images/1.png

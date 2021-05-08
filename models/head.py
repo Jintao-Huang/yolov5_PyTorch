@@ -35,7 +35,7 @@ class Head(nn.Module):
 
         :param x: List[Tensor]. e.g. List[shape[N, 128, 80, 80], shape[N, 256, 40, 40], shape[N, 512, 20, 20]]
         :return: x: e.g. List[shape[N, 3, 80, 80, 25], shape[N, 3, 40, 40, 25], shape[N, 3, 20, 20, 25]]
-                 z: e.g. shape[N, 15120, 25]. center_xy, wh, conf_obj, conf_class
+                 z: e.g. shape[N, 15120, 25]. [cxcywh, obj_conf, cls_conf].
         """
         z = []  # detect output
         x = list(x)  # not tuple
