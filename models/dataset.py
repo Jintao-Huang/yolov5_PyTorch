@@ -3,7 +3,7 @@
 from torch.utils.data import Dataset
 import torch
 import cv2 as cv
-from .utils import resize_pad
+from .utils import resize_pad, ltrb2cxcywh, cxcywh2ltrb, cxcywhn_after_pad
 import os
 import numpy as np
 
@@ -44,7 +44,7 @@ class LoadImagesAndLabels(Dataset):
         """
 
         :param img_path_list: List[str].
-        :param target_list: List[ndarray[X, 5], Tuple[H, W]]
+        :param target_list: List[ndarray[X, 5], Tuple[H, W]]. [cls, *xywhn]
         :param img_size: int. 640
         :param stride: int. 32
         :param pad: train: 0.0, test: 0.5
@@ -73,19 +73,19 @@ class LoadImagesAndLabels(Dataset):
             self.batch_i = np.floor(np.arange(self.num_images) / batch_size).astype(np.int)
             num_batches = self.batch_i[-1] + 1
 
-            # ratio_hw sort
-            ratio_wh = self.shapes[0] / self.shapes[1]
+            # ratio_wh sort
+            ratio_wh = self.shapes[:, 0] / self.shapes[:, 1]
             sort_i = ratio_wh.argsort()
             self.img_path_list = [self.img_path_list[i] for i in sort_i]
             self.target_list = [self.target_list[i] for i in sort_i]
             self.shapes = self.shapes[sort_i]
-            ratio_hw = ratio_wh[sort_i]
+            ratio_wh = ratio_wh[sort_i]
 
             # set batch shapes
             shapes = []
             for i in range(num_batches):
-                ratio_hw_i = ratio_hw[self.batch_i == i]
-                ratio_min, ratio_max = np.min(ratio_hw_i), np.max(ratio_hw_i)
+                ratio_wh_i = ratio_wh[self.batch_i == i]
+                ratio_min, ratio_max = np.min(ratio_wh_i), np.max(ratio_wh_i)
                 if ratio_max < 1:  # w < h
                     shapes.append([ratio_max, 1])
                 elif ratio_min > 1:  # w > h
@@ -99,25 +99,30 @@ class LoadImagesAndLabels(Dataset):
         """
 
         :param idx:
-        :return: x: Tensor[C, H, W], target_out: Tensor[X, 6], path: str
+        :return: x: Tensor[C, H, W], target_out: Tensor[X, 6], path: str. [idx, cls, *xywhn]
         """
         if self.train:
             pass
         else:  # test: rect and batch_size
-            # load image and resize
+            # load img and resize
             x, _ = self._load_image(idx)
+            h0, w0 = x.shape[:2]
             # Pad
             new_shape = self.batch_shapes[self.batch_i[idx]]
-            x, ratio, pad = resize_pad(x, new_shape, False, 32, True)
-            target = self.target_list[idx]
+            x, ratio, (pad_w, pad_h) = resize_pad(x, new_shape, False, 32, True)
+            img_path = self.img_path_list[idx]
+            target = self.target_list[idx].copy()
+            boxes = target[:, 1:]  # shape[X, 4]. cxcywhn
+            cxcywhn_after_pad(boxes, w0, h0, pad_w, pad_h)
+            # numpy to Tensor
             num_labels = len(target)
             target_out = torch.zeros((num_labels, 6))
             if num_labels:
-                target[:, 1:] = torch.from_numpy(self.target_list[idx])  # 0 代表某batch中的第几张
-            x = x[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to (C, H, W))
+                target_out[:, 1:] = torch.from_numpy(target)  # 0 代表某batch中的第几张
+            x = x[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to (C, H, W)
             x = np.ascontiguousarray(x)
             x = torch.from_numpy(x)
-            return x, target_out, self.img_path_list[idx]
+            return x, target_out, img_path
 
     def __len__(self):
         return self.num_images
@@ -140,9 +145,11 @@ class LoadImagesAndLabels(Dataset):
         img0_h, img0_w = img0.shape[:2]
         ratio = self.img_size / max(img0_h, img0_w)
         if ratio != 1:
-            new_shape = int(round(img0_w * ratio)), int(round(img0_h * ratio))
+            # new_shape = int(round(img0_w * ratio)), int(round(img0_h * ratio))
+            new_shape = int(img0_w * ratio), int(img0_h * ratio)
             img = cv.resize(img0, new_shape,
                             interpolation=cv.INTER_AREA if ratio < 1 else cv.INTER_LINEAR)
+                            # interpolation=cv.INTER_LINEAR)
         else:
             img = img0
         return img, img0

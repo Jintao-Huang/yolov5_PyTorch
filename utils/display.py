@@ -81,31 +81,34 @@ def cv_to_pil(arr):
     return Image.fromarray(arr)
 
 
-def draw_target_in_image(image, target, labels_map="coco", colors_map=None, ):
+def draw_target_in_image(image, boxes, labels, scores=None, labels_map="coco", colors_map=None):
     """画框在image上 (draw boxes and text in image)
 
     :param image: ndarray[H, W, C]. BGR. 变
-    :param target: Tensor[X, 6]. [boxes_ltrb, conf, cls].
+    :param boxes: ndarray[X, 6]. ltrb, 未归一化
+    :param labels: ndarray[X]
+    :param scores: ndarray[X]. 从大到小排序
     :param labels_map: List/str["coco", "voc"]. 将int 映射成 类别. 默认: coco_labels_map
     :param colors_map: List -> tuple(B, G, R)  # [0, 256).
     :return: None
     """
+    boxes = np.round(boxes).astype(np.int32)
+    labels = labels.astype(np.int32)
+    if scores is None:
+        scores = [None] * labels.shape[0]
     if labels_map == "coco":
         labels_map = coco_labels
     elif labels_map == "voc":
         labels_map = voc_labels
     colors_map = colors_map or default_colors
-    boxes = target[:, :4].round().int().cpu().numpy()
-    scores = target[:, 4].cpu().numpy()
-    labels = target[:, 5].int().cpu().numpy()
     # draw
     for box, label in zip(boxes, labels):
         color = colors_map[label]
         draw_box(image, box, color=color)  # 画方框
-    for box, label, score in zip(boxes, labels, scores):  # 先画框再写字: 防止框把字盖住
+    for box, label, score in reversed(list(zip(boxes, labels, scores))):  # 先画框再写字: 防止框把字盖住. 概率大盖住概率小
         color = colors_map[label]
         label_name = labels_map[label]
-        text = "%s %.2f" % (label_name, score)
+        text = "%s %.2f" % (label_name, score) if score else "%s" % label_name
         draw_text(image, box, text, color)  # 写字
 
 
@@ -148,7 +151,7 @@ coco_labels = {
     81: 'refrigerator', 82: '', 83: 'book', 84: 'clock', 85: 'vase',
     86: 'scissors', 87: 'teddy bear', 88: 'hair drier', 89: 'toothbrush'
 }
-
+coco_labels = list(coco_labels.values())
 voc_labels = ['aeroplane', 'bicycle', 'bird', 'boat', 'bottle',
               'bus', 'car', 'cat', 'chair', 'cow',
               'diningtable', 'dog', 'horse', 'motorbike', 'person',

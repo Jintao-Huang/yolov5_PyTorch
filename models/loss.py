@@ -6,10 +6,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class Loss(nn.Module):
-    pass
-
-
 def binary_focal_loss(
         pred: torch.Tensor,
         target: torch.Tensor,
@@ -43,3 +39,7 @@ def binary_focal_loss(
         loss = loss.sum()
 
     return loss
+
+
+class Loss(nn.Module):
+    pass
