@@ -2,8 +2,8 @@ other/
 weights/*
 images/*
 
-!weights/yolov5s_coco.pth
-!weights/yolov5s_voc.pth
+# !weights/yolov5s_coco.pth
+# !weights/yolov5s_voc.pth
 !images/1.png
 
 hash.py
