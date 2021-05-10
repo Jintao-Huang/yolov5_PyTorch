@@ -109,6 +109,7 @@ def cxcywh2ltrb(boxes):
 
 
 def cxcywhn_after_pad(boxes, w0, h0, pad_w, pad_h):
+    """cxcywhn -> cxcywhn. pad后的调整"""
     w, h = w0 + pad_w * 2, h0 + pad_h * 2
     boxes[:, 0] = (boxes[:, 0] * w0 + pad_w) / w  # cx
     boxes[:, 1] = (boxes[:, 1] * h0 + pad_h) / h  # cy
@@ -208,3 +209,79 @@ def model_info(model, img_size=640):
 
     print("Model Summary: %d layers, %d parameters, %d gradients%s" %
           (len(list(model.modules())), num_params, num_grads, flops_str))
+
+
+def box_iou(boxes1, boxes2):
+    """参考 torchvision.ops.boxes.box_iou(). for mAP.
+
+    :param boxes1: Tensor[M, 4]
+    :param boxes2: Tensor[N, 4]
+    :return: Tensor[M, N]
+    """
+
+    def box_area(boxes):
+        """参考 torchvision.ops.boxes.box_area()"""
+        return (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+
+    area1 = box_area(boxes1)
+    area2 = box_area(boxes2)
+
+    lt = torch.max(boxes1[:, None, :2], boxes2[None, :, :2])  # [N, M, 2]
+    rb = torch.min(boxes1[:, None, 2:], boxes2[None, :, 2:])  # [N, M, 2]
+
+    wh = (rb - lt).clamp_min(0)  # [N, M, 2]
+    inter = wh[:, :, 0] * wh[:, :, 1]  # [N, M]
+    union = area1[:, None] + area2[None, :] - inter
+    iou = inter / union
+    return iou
+
+
+def box_ciou(boxes1, boxes2):
+    """boxes1, boxes2 计算iou时，一一对应，与torchvision中box_iou计算方式不同
+    GIoU: https://arxiv.org/pdf/1902.09630.pdf
+    DIoU: https://arxiv.org/pdf/1911.08287.pdf
+    CIoU: (https://arxiv.org/pdf/2005.03572.pdf).
+    The consistency of the aspect ratio between the anchor boxes and the target boxes is also extremely important
+
+    :param boxes1: Tensor[X, 4]
+    :param boxes2: Tensor[X, 4]
+    :return: Tensor[X]"""
+
+    def _cal_distance2(dx, dy):
+        """欧式距离的平方(Euclidean distance squared)"""
+        return dx ** 2 + dy ** 2
+
+    # 1. calculate iou
+    wh_boxes1 = boxes1[:, 2:] - boxes1[:, :2]  # shape[X, 2].
+    wh_boxes2 = boxes2[:, 2:] - boxes2[:, :2]
+    area1 = wh_boxes1[:, 0] * wh_boxes1[:, 1]  # shape[X]
+    area2 = wh_boxes2[:, 0] * wh_boxes2[:, 1]
+
+    lt_inner = torch.max(boxes1[:, :2], boxes2[:, :2])  # shape[X, 2] 内框
+    rb_inner = torch.min(boxes1[:, 2:], boxes2[:, 2:])  # shape[X, 2]
+    wh_inner = (rb_inner - lt_inner).clamp_min(0)  # shape[X, 2]
+
+    inter = wh_inner[:, 0] * wh_inner[:, 1]
+    union = area1 + area2 - inter
+    iou = inter / union  # [X]
+
+    # 2. calculate 惩罚项1(中心点距离)
+    lt_outer = torch.min(boxes1[:, :2], boxes2[:, :2])  # [X, 2]  外框
+    rb_outer = torch.max(boxes1[:, 2:], boxes2[:, 2:])  # [X, 2]
+    wh_outer = rb_outer - lt_outer  # [X, 2]
+    lt_center = (boxes1[:, 2:] + boxes1[:, :2]) / 2  # [X, 2]  中心点框
+    rb_center = (boxes2[:, 2:] + boxes2[:, :2]) / 2  # [X, 2]
+    wh_center = lt_center - rb_center
+    # dist2_outer: (外边框对角线距离的平方) The square of the diagonal distance of the outer border
+    dist2_outer = _cal_distance2(wh_outer[:, 0], wh_outer[:, 1])  # [X]
+    dist2_center = _cal_distance2(wh_center[:, 0], wh_center[:, 1])
+
+    # 3. calculate 惩罚项2(aspect_ratios差距). 公式详见论文, 变量同论文
+    v = (4 / np.pi ** 2) * \
+        (torch.atan(wh_boxes1[:, 0] / wh_boxes1[:, 1]) -
+         torch.atan(wh_boxes2[:, 0] / wh_boxes2[:, 1])) ** 2  # [X]
+    with torch.no_grad():  # alpha为系数，无需梯度
+        alpha = v / (1 - iou + v)  # [X]
+    # diou = iou - dist2_center / dist2_outer
+    ciou = iou - dist2_center / dist2_outer - alpha * v  # [X]
+    return ciou

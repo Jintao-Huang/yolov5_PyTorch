@@ -11,16 +11,16 @@ from utils.utils import load_params, save_params, load_from_pickle
 from utils.display import draw_target_in_image, resize_max
 from make_dataset import make_dataset
 import numpy as np
+from models.loss import Loss
 
 
 def test_detect():
-    # pred = load_from_pickle("other/pred.pkl")
     if torch.cuda.is_available():
         device = torch.device('cuda')
     else:
         device = torch.device('cpu')
     model = YOLOv5(80).to(device)
-    print(load_params(model, "weights/yolov5s_coco.pth"))
+    print(load_params(model, "weights/yolov5s_coco.pth", strict=False))
     dataset = LoadImages("./images", 640, 32)
     model.float().fuse().eval().requires_grad_(False)
     half = (device.type != 'cpu')
@@ -47,6 +47,7 @@ def test_detect():
         scores = target[:, 4].cpu().numpy()
         labels = target[:, 5].cpu().numpy()
         img = img0.copy()
+        boxes[0] = [0, 1, 1920, 1079]
         # 画图
         draw_target_in_image(img, boxes, labels, scores, "coco")
         img = resize_max(img, 720, 1080)
@@ -88,24 +89,30 @@ def test_test():
     else:
         device = torch.device('cpu')
     model = YOLOv5(20).to(device)
-    print(load_params(model, "weights/yolov5s_voc.pth"))
+    print(load_params(model, "weights/yolov5s_voc.pth", strict=False))
     model.float().fuse().eval().requires_grad_(False)
     half = (device.type != 'cpu')
     model.half() if half else None
+    hyp = {"obj_pw": 0.911, "cls_pw": 0.631, "anchor_t": 2.91,
+           "box_lw": 0.0296, "obj_lw": 0.301, "cls_lw": 0.06075}
+    loss_func = Loss(model, hyp)
+    loss = torch.zeros((4,), device=device)
     for x, target0, img_path in reversed(dataset):
         img0 = x.numpy()
         img0 = img0.transpose(1, 2, 0)[:, :, ::-1]  # to (H, W, C), RGB to BGR,
         img0 = np.ascontiguousarray(img0)
         img = img0.copy()
         # 预处理
-        x = x.to(device)
+        x, target0 = x.to(device), target0.to(device)
         x = x.half() if half else x.float()
         x /= 255
         if x.dim() == 3:
             x = x[None]
         # 预测
-        target = model(x)[0]
+        target, loss_target = model(x)
+        loss += loss_func([loss_t.float() for loss_t in loss_target], target0)[1]
         target = nms(target, 0.001, 0.6)
+
         # 后处理
         # 1
         target = target[0]
@@ -129,8 +136,8 @@ def test_test():
 
 if __name__ == "__main__":
     # detect
-    with torch.no_grad():
-        test_detect()
+    # with torch.no_grad():
+    #     test_detect()
     # test
     with torch.no_grad():
         test_test()

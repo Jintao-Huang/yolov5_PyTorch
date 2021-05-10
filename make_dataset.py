@@ -38,7 +38,7 @@ if __name__ == "__main__":
     make_dataset(r"D:\datasets\VOCdevkit\VOC0712\JPEGImages",
                  r"D:\datasets\VOCdevkit\VOC0712\Annotations",
                  r"D:\datasets\VOCdevkit\VOC0712\pkl\voc_0712_test.pkl",
-                 r"D:\datasets\VOCdevkit\VOC0712\ImageSets\Main\test.txt", "voc", False)
+                 r"D:\datasets\VOCdevkit\VOC0712\ImageSets\Main\test.txt", "voc", True)
     make_dataset(r"D:\datasets\VOCdevkit\VOC0712\JPEGImages",
                  r"D:\datasets\VOCdevkit\VOC0712\Annotations",
                  r"D:\datasets\VOCdevkit\VOC0712\pkl\voc_0712_trainval.pkl",

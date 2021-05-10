@@ -8,26 +8,32 @@ __all__ = ["Head"]
 
 
 class Head(nn.Module):
-    def __init__(self, num_classes, anchors_shape=None):
+    def __init__(self, num_classes, anchors=None):
         """
 
         :param num_classes: int
-        :param anchors_shape: Tuple[Tuple[W, H]].
+        :param anchors: Tuple[Tuple[W, H]].
         """
         super(Head, self).__init__()
         self.out_channels = num_classes + 5
+        anchors = anchors or ((10, 13, 16, 30, 33, 23),
+                              (30, 61, 62, 45, 59, 119),
+                              (116, 90, 156, 198, 373, 326))
         # e.g. [1, 3, 48, 80, 2] * [1, 3, 1, 1, 2]
-        anchors_shape = anchors_shape or (10, 13, 16, 30, 33, 23,
-                                          30, 61, 62, 45, 59, 119,
-                                          116, 90, 156, 198, 373, 326)
-        anchors_shape = torch.tensor(anchors_shape, dtype=torch.float32).view(3, 1, 3, 1, 1, 2)
-        self.register_buffer("anchor_shape", anchors_shape)
-        self.grid = [torch.tensor(0., dtype=torch.float32)] * 3
+        self.num_layers, self.num_anchors = len(anchors), len(anchors[0]) // 2
+        anchors = torch.tensor(anchors, dtype=torch.float32) \
+            .view(self.num_layers, self.num_anchors, 2)  # shape[NL, NA, 2]
+        # shape[NL, N, NA, H, W, 2]. 即 [NL, 1, NA, 1, 1, 2]
+        anchors_grid = anchors.clone().view(self.num_layers, 1, self.num_anchors, 1, 1, 2)
+        self.register_buffer("anchors", anchors)  # for loss.build_targets()
+        self.register_buffer("anchors_grid", anchors_grid)  # for self.forward()
+        self.grid = [torch.zeros(())] * self.num_layers
         self.stride = [8., 16., 32.]
+        self.anchors = self.anchors / torch.tensor(self.stride, device=self.anchors.device)[:, None, None]
         self.conv_list = nn.ModuleList([
-            nn.Conv2d(128, 3 * self.out_channels, 1, 1, 0, bias=True),
-            nn.Conv2d(256, 3 * self.out_channels, 1, 1, 0, bias=True),
-            nn.Conv2d(512, 3 * self.out_channels, 1, 1, 0, bias=True)
+            nn.Conv2d(128, self.num_anchors * self.out_channels, 1, 1, 0, bias=True),
+            nn.Conv2d(256, self.num_anchors * self.out_channels, 1, 1, 0, bias=True),
+            nn.Conv2d(512, self.num_anchors * self.out_channels, 1, 1, 0, bias=True)
         ])
 
     def forward(self, x):
@@ -50,14 +56,14 @@ class Head(nn.Module):
                 """
                 bx = 2 * sigmoid(tx) - 0.5 + ax. -0.5 ~ 1.5
                 by = 2 * sigmoid(ty) - 0.5 + ay
-                bw = (2 * sigmoid(tw) ** 2) * aw. 0 ~ 4
-                bh = (2 * sigmoid(th) ** 2) * ah
+                bw = (2 * sigmoid(tw)) ** 2 * aw. 0 ~ 4
+                bh = (2 * sigmoid(th)) ** 2 * ah
                 """
-                y = x[i].sigmoid()
+                y = x[i].sigmoid()  # y.shape: [N, 3, H, W, 25]
                 # y[..., 0:2], self.grid[i], self.anchor_grid[i]
                 # [N, 3, 48, 80, 2], [1, 1, 48, 80, 2], [1, 3, 1, 1, 2]
                 y[..., 0:2] = (2 * y[..., 0:2] - 0.5 + self.grid[i]) * self.stride[i]  # center_xy
-                y[..., 2:4] = (2 * y[..., 2:4]) ** 2 * self.anchor_shape[i]  # wh
+                y[..., 2:4] = (2 * y[..., 2:4]) ** 2 * self.anchors_grid[i]  # wh
                 y = y.view(x[i].shape[0], -1, self.out_channels)
                 z.append(y)
 
