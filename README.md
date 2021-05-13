@@ -3,7 +3,7 @@
 ## Easy to Learn!!!
 
 复现（重写）yolov5, just for study ~  
-开发中...预计1星期后完成  
+开发中...最近忙毕业设计，搁置开发，预计6月初继续  
 
 English:  
 reproduce yolov5, just for study ~  
